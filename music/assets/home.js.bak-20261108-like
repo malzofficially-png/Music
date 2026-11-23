@@ -1,0 +1,255 @@
+(function () {
+  'use strict';
+
+  function gid(id) { return document.getElementById(id); }
+  function es(s) { if (s == null) return ''; var d = document.createElement('div'); d.textContent = String(s); return d.innerHTML; }
+  function escAttr(s) { if (s == null) return ''; return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  function thumb(t) { return window.pickThumb ? window.pickThumb(t) : (t.thumbnail || t.cover || ''); }
+
+  var Home = {
+    init: function () {},
+    rendered: false,
+    _data: {},
+
+    greeting: function () {
+      var h = new Date().getHours();
+      if (h < 12) return 'Selamat Pagi';
+      if (h < 18) return 'Selamat Siang';
+      return 'Selamat Malam';
+    },
+
+    chips: [
+      'Trending 2026',
+      'Lagu Indonesia Populer',
+      'Viral TikTok',
+      'Top Hits Global',
+      'K-Pop Hits',
+      'Chill Lofi',
+      'Pop Indonesia',
+      'Indie Indonesia',
+      'EDM Party',
+      'Romantis',
+      'Nostalgia 2000an',
+      'Gaming Music',
+      'Workout Motivation'
+    ],
+
+    rows: [
+      { title: 'Trending 2026',           q: 'Trending 2026' },
+      { title: 'Lagu Indonesia Populer',  q: 'Lagu Indonesia Populer 2026' },
+      { title: 'Viral TikTok 2026',       q: 'Viral TikTok 2026' },
+      { title: 'Top Hits Global 2026',    q: 'Top Hits 2026' },
+      { title: 'K-Pop Hits 2026',         q: 'K-Pop Hits 2026' },
+      { title: 'Pop Indonesia Terbaru',   q: 'Pop Indonesia 2026' },
+      { title: 'Chill Lofi',              q: 'Chill Lofi Indonesia' },
+      { title: 'Indie Indonesia',         q: 'Indie Indonesia' },
+      { title: 'EDM Party',               q: 'EDM Party Hits 2026' },
+      { title: 'Romantis',                q: 'Lagu Romantis Indonesia' },
+      { title: 'Nostalgia 2000an',        q: 'Lagu Nostalgia 2000an' },
+      { title: 'Gaming Music',            q: 'Gaming Music 2026' },
+      { title: 'Workout Motivation',      q: 'Workout Motivation Music' }
+    ],
+
+    render: function () {
+      var el = gid('view-home');
+      if (!el) return;
+      el.style.display = 'block';
+      if (this.rendered) return;
+      this.rendered = true;
+
+      var chipsHtml = this.chips.map(function (c) {
+        return '<button class="spotify-chip" data-cat="' + escAttr(c) + '">' + es(c) + '</button>';
+      }).join('');
+
+      el.innerHTML =
+        '<section class="spotify-hero">' +
+          '<div class="spotify-hero-gradient"></div>' +
+          '<div class="spotify-hero-content">' +
+            '<h1 class="spotify-greeting">' + es(this.greeting()) + '</h1>' +
+            '<div class="spotify-chips">' + chipsHtml + '</div>' +
+          '</div>' +
+        '</section>' +
+        '<div class="spotify-main">' +
+          '<div id="home-rows" class="spotify-rows"></div>' +
+        '</div>';
+
+      var chipsBar = el.querySelector('.spotify-chips');
+      if (chipsBar) {
+        chipsBar.addEventListener('click', function (e) {
+          var btn = e.target.closest('.spotify-chip');
+          if (!btn) return;
+          var q = btn.getAttribute('data-cat');
+          if (window.Search) {
+            App.switch('search');
+            setTimeout(function () {
+              var input = gid('search-input');
+              if (input) {
+                input.value = q;
+                var form = gid('search-form');
+                if (form) form.dispatchEvent(new Event('submit'));
+              }
+            }, 120);
+          }
+        });
+      }
+
+      this.renderRows();
+    },
+
+    renderRows: function () {
+      var container = gid('home-rows');
+      if (!container) return;
+      var self = this;
+
+      container.innerHTML = this.rows.map(function (r, i) {
+        return '<section class="spotify-row" data-rowid="row-' + i + '">' +
+          '<div class="spotify-row-head">' +
+            '<h2>' + es(r.title) + '</h2>' +
+            '<button class="spotify-row-more" data-q="' + escAttr(r.q) + '">Lihat semua</button>' +
+          '</div>' +
+          '<div class="spotify-grid" id="row-' + i + '"></div>' +
+        '</section>';
+      }).join('');
+
+      container.addEventListener('click', function (e) {
+        var more = e.target.closest('.spotify-row-more');
+        if (!more) return;
+        var q = more.getAttribute('data-q');
+        if (window.Search) {
+          App.switch('search');
+          setTimeout(function () {
+            var input = gid('search-input');
+            if (input) {
+              input.value = q;
+              var form = gid('search-form');
+              if (form) form.dispatchEvent(new Event('submit'));
+            }
+          }, 120);
+        }
+      });
+
+      this.rows.forEach(function (r, i) {
+        self.fetchRow('row-' + i, r.q, r.isArtist);
+      });
+    },
+
+    fetchRow: function (bodyId, query, isArtist) {
+      var body = gid(bodyId);
+      if (!body) return;
+      var skel = [];
+      for (var i = 0; i < 6; i++) {
+        skel.push('<div class="spotify-card spotify-skel">' +
+          '<div class="spotify-card-img skel-img"></div>' +
+          '<div class="spotify-card-title skel-line"></div>' +
+          '<div class="spotify-card-artist skel-line short"></div>' +
+        '</div>');
+      }
+      body.innerHTML = skel.join('');
+
+      var typeParam = isArtist ? '&type=artists' : '&type=songs';
+
+      fetch(window.MALZ_CONFIG.api + 'search&query=' + encodeURIComponent(query) + typeParam)
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          var items = [];
+          if (d && d.result) {
+            if (isArtist && d.result.artists) items = d.result.artists;
+            else if (d.result.songs) items = d.result.songs;
+          }
+          if (!items || !items.length) {
+            var section = body.closest('.spotify-row');
+            if (section) section.style.display = 'none';
+            return;
+          }
+          Home._data[bodyId] = items;
+          Home.renderRow(bodyId, items, isArtist);
+        })
+        .catch(function () {
+          var section = body.closest('.spotify-row');
+          if (section) section.style.display = 'none';
+        });
+    },
+
+    renderRow: function (bodyId, items, isArtist) {
+      var body = gid(bodyId);
+      if (!body) return;
+      var FI = window.Player ? Player.FI : '';
+      var list = items.slice(0, 20);
+      body.innerHTML = list.map(function (t, i) {
+        var cover = thumb(t) || FI;
+        var title = t.title || t.name || 'Unknown';
+        var artist = t.artist || 'Artist';
+        var cb = isArtist ? 'Home.playArtist' : 'Home.playSong';
+        var tid = escAttr(t.videoId || t.id || '');
+        return '<div class="spotify-card" data-track-id="' + tid + '" style="--i:' + i + '" onclick="' + cb + '(\'' + bodyId + '\',' + i + ')">' +
+          '<div class="spotify-card-img">' +
+            '<img src="' + escAttr(cover) + '" alt="' + escAttr(title) + '" loading="lazy" onerror="this.onerror=null;this.src=\'' + escAttr(FI) + '\'">' +
+            '<button class="spotify-card-play" type="button" onclick="event.stopPropagation();' + cb + '(\'' + bodyId + '\',' + i + ')">' +
+              '<svg viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"/></svg>' +
+            '</button>' +
+            '<button class="card-more" type="button" aria-label="Menu" onclick="event.stopPropagation();Home.openMenu(\'' + bodyId + '\',' + i + ')">&#8942;</button>' +
+          '</div>' +
+          '<div class="spotify-card-title">' + es(title) + '</div>' +
+          '<div class="spotify-card-artist">' + es(artist) + '</div>' +
+        '</div>';
+      }).join('');
+    },
+
+    openMenu: function(bodyId, i){
+      var t=(this._data[bodyId]||[])[i]; if(!t)return;
+      var trackUrl = 'https://malz-official.com/music/watch.php?id=' + encodeURIComponent(t.videoId || t.id || '') + '&title=' + encodeURIComponent(t.title || '') + '&artist=' + encodeURIComponent(t.artist || '');
+      var old=document.getElementById('home-track-menu');if(old)old.remove();var m=document.createElement('div');m.id='home-track-menu';m.className='track-menu';m.innerHTML='<div class="track-menu-backdrop"></div><div class="track-menu-box"><b>'+es(t.title||'Lagu')+'</b><button data-a="copy">Copy link</button><button data-a="share">Share link</button><button data-a="play">Putar</button><button data-a="close">Tutup</button></div>';document.body.appendChild(m);
+      m.querySelector('[data-a="copy"]').onclick=function(){navigator.clipboard.writeText(trackUrl);};m.querySelector('[data-a="share"]').onclick=function(){if(navigator.share)navigator.share({title:t.title||'Lagu',url:trackUrl});else navigator.clipboard.writeText(trackUrl);};m.querySelector('[data-a="play"]').onclick=function(){Home.playSong(bodyId,i);m.remove();};m.querySelector('[data-a="close"]').onclick=function(){m.remove();};m.querySelector('.track-menu-backdrop').onclick=function(){m.remove();};
+    },
+
+    playSong: function (bodyId, i) {
+      var items = Home._data[bodyId] || [];
+      if (!items[i]) return;
+      var list = items.map(function (s) {
+        var vid = s.videoId || s.id;
+        return {
+          id: vid,
+          videoId: vid,
+          title: s.title || s.name,
+          artist: s.artist || '',
+          cover: thumb(s),
+          artistId: s.artistId || '',
+          ytUrl: s.url || ('https://youtube.com/watch?v=' + vid)
+        };
+      });
+      if (window.Player) Player.playIndex(list, i, 'home');
+      if (window.FullPlayer && FullPlayer.open) FullPlayer.open();
+    },
+
+    playArtist: function (bodyId, i) {
+      var items = Home._data[bodyId] || [];
+      if (!items[i]) return;
+      var a = items[i];
+      if (window.Artist) Artist.open(a.id || a.artistId || a.browseId, a.title || a.name, thumb(a));
+    }
+  };
+
+  window.Home = Home;
+
+  function warmVisible() {
+    if (!('IntersectionObserver' in window)) return;
+    var seen = {};
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        if (!en.isIntersecting) return;
+        var card = en.target;
+        var id = card.getAttribute('data-track-id');
+        if (!id || seen[id]) return;
+        seen[id] = 1;
+        if (seen.__n === undefined) seen.__n = 0;
+        if (seen.__n >= 12) return;
+        seen.__n++;
+        fetch('/music/audio?warm=1&id=' + encodeURIComponent(id), {method: 'GET'}).catch(function () {});
+      });
+    }, {rootMargin: '120px'});
+    document.querySelectorAll('.spotify-card[data-track-id]').forEach(function (c) { io.observe(c); });
+  }
+  if (document.readyState === 'complete') setTimeout(warmVisible, 1500);
+  else window.addEventListener('load', function () { setTimeout(warmVisible, 1500); });
+
+})();

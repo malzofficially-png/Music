@@ -1,0 +1,217 @@
+/* Malz-Musify FullPlayer motion — additive only, does not touch style.css / spotify.css */
+
+#full-player {
+  display: flex !important;
+  flex-direction: column;
+  transform: translate3d(0, 100%, 0);
+  visibility: hidden;
+  pointer-events: none;
+  background: #050608;
+  transition:
+    transform 520ms cubic-bezier(.22, 1, .36, 1),
+    visibility 0s linear 520ms;
+}
+
+#full-player.is-open {
+  transform: translate3d(0, 0, 0);
+  visibility: visible;
+  pointer-events: auto;
+  will-change: transform;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  transition:
+    transform 520ms cubic-bezier(.22, 1, .36, 1),
+    visibility 0s;
+}
+
+#full-player.is-dragging {
+  transition: none !important;
+  will-change: transform;
+}
+
+/* dim the page behind the rising panel */
+.fp-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 160;
+  background: rgba(0, 0, 0, 0.62);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 420ms cubic-bezier(.22, 1, .36, 1),
+    visibility 0s linear 420ms;
+}
+.fp-scrim.is-open {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition:
+    opacity 420ms cubic-bezier(.22, 1, .36, 1),
+    visibility 0s;
+}
+
+/* artwork: scale + fade */
+#fp-stage-cover {
+  opacity: 0;
+  transform: scale(0.94);
+  transition:
+    opacity 420ms cubic-bezier(.22, 1, .36, 1),
+    transform 520ms cubic-bezier(.22, 1, .36, 1);
+  will-change: transform, opacity;
+}
+#full-player.is-open #fp-stage-cover {
+  opacity: 1;
+  transform: scale(1);
+  transition-delay: 90ms;
+}
+
+/* metadata + controls: staggered rise */
+#full-player #fp-title,
+#full-player #fp-artist,
+#full-player #fp-time-curr,
+#full-player #fp-seek,
+#full-player #fp-time-dur,
+#full-player #fp-shuffle,
+#full-player #fp-prev-btn,
+#full-player #fp-play-btn,
+#full-player #fp-next-btn,
+#full-player #fp-repeat,
+#full-player #fp-tab-cover,
+#full-player #fp-tab-lyrics {
+  opacity: 0;
+  transform: translate3d(0, 14px, 0);
+  transition:
+    opacity 340ms cubic-bezier(.22, 1, .36, 1),
+    transform 420ms cubic-bezier(.22, 1, .36, 1);
+}
+#full-player.is-open #fp-title,
+#full-player.is-open #fp-artist,
+#full-player.is-open #fp-time-curr,
+#full-player.is-open #fp-seek,
+#full-player.is-open #fp-time-dur,
+#full-player.is-open #fp-shuffle,
+#full-player.is-open #fp-prev-btn,
+#full-player.is-open #fp-play-btn,
+#full-player.is-open #fp-next-btn,
+#full-player.is-open #fp-repeat,
+#full-player.is-open #fp-tab-cover,
+#full-player.is-open #fp-tab-lyrics {
+  opacity: 1;
+  transform: none;
+}
+
+#full-player.is-open #fp-title      { transition-delay: 170ms; }
+#full-player.is-open #fp-artist     { transition-delay: 205ms; }
+#full-player.is-open #fp-time-curr  { transition-delay: 235ms; }
+#full-player.is-open #fp-seek       { transition-delay: 245ms; }
+#full-player.is-open #fp-time-dur   { transition-delay: 255ms; }
+#full-player.is-open #fp-shuffle    { transition-delay: 285ms; }
+#full-player.is-open #fp-prev-btn   { transition-delay: 315ms; }
+#full-player.is-open #fp-play-btn   { transition-delay: 345ms; }
+#full-player.is-open #fp-next-btn   { transition-delay: 375ms; }
+#full-player.is-open #fp-repeat     { transition-delay: 405ms; }
+#full-player.is-open #fp-tab-cover  { transition-delay: 120ms; }
+#full-player.is-open #fp-tab-lyrics { transition-delay: 145ms; }
+
+/* track change while open: crossfade artwork, no reload */
+#fp-cover.fp-swap,
+#fp-bg.fp-swap,
+#fp-mini-cover.fp-swap {
+  animation: fpCrossfade 460ms cubic-bezier(.22, 1, .36, 1);
+}
+@keyframes fpCrossfade {
+  0%   { opacity: 0.25; transform: scale(1.035); }
+  100% { opacity: 1;    transform: scale(1); }
+}
+
+#fp-title.fp-swap,
+#fp-artist.fp-swap {
+  animation: fpMetaIn 360ms cubic-bezier(.22, 1, .36, 1);
+}
+@keyframes fpMetaIn {
+  0%   { opacity: 0; transform: translate3d(0, 8px, 0); }
+  100% { opacity: 1; transform: none; }
+}
+
+/* drag handle */
+#fp-drag-handle {
+  touch-action: none;
+  position: relative;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  margin: -6px 0 2px;
+  cursor: grab;
+  touch-action: none;
+  flex: 0 0 auto;
+}
+#fp-drag-handle::after {
+  content: "";
+  width: 44px;
+  height: 4px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.28);
+  transition: background 200ms, width 200ms;
+}
+#fp-drag-handle:active {
+  cursor: grabbing;
+}
+#fp-drag-handle:active::after {
+  background: rgba(255, 255, 255, 0.5);
+  width: 56px;
+}
+
+/* lyrics stage entry */
+#fp-stage-lyrics {
+  animation: fpLyricsIn 320ms cubic-bezier(.22, 1, .36, 1);
+}
+@keyframes fpLyricsIn {
+  from { opacity: 0; transform: translate3d(0, 12px, 0); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* active lyric line */
+.inline-lyric-line {
+  transition: color 220ms ease, opacity 220ms ease, transform 320ms cubic-bezier(.22, 1, .36, 1);
+}
+.inline-lyric-line.fp-active {
+  color: #fff;
+  opacity: 1;
+  transform: scale(1.02);
+  transform-origin: left center;
+}
+
+/* press feedback on every control */
+#full-player.is-open button:active {
+  transform: scale(0.94) !important;
+}
+#full-player button {
+  transition: transform 140ms cubic-bezier(.22, 1, .36, 1), background 200ms, color 200ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #full-player,
+  #full-player.is-open,
+  #full-player.is-dragging,
+  #fp-stage-cover,
+  #full-player #fp-title,
+  #full-player #fp-artist,
+  #full-player #fp-time-curr,
+  #full-player #fp-seek,
+  #full-player #fp-time-dur,
+  #full-player #fp-shuffle,
+  #full-player #fp-prev-btn,
+  #full-player #fp-play-btn,
+  #full-player #fp-next-btn,
+  #full-player #fp-repeat,
+  #full-player #fp-tab-cover,
+  #full-player #fp-tab-lyrics,
+  .fp-scrim {
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}

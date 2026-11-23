@@ -1,0 +1,17 @@
+{
+  "name": "Malz-Musify",
+  "short_name": "Musify",
+  "description": "Web Music Player ringan. Streaming lagu Indonesia, Top Hits Global, K-Pop, dan banyak lagi. Tanpa iklan, tanpa limit.",
+  "start_url": "/music/?source=pwa",
+  "scope": "/music/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#050608",
+  "theme_color": "#050608",
+  "categories": ["music", "entertainment"],
+  "icons": [
+    { "src": "/music/assets/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/music/assets/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/music/assets/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

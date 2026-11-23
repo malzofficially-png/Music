@@ -1,0 +1,409 @@
+(function () {
+  'use strict';
+
+  function gid(id) { return document.getElementById(id); }
+  function es(s) { if (s == null) return ''; var d = document.createElement('div'); d.textContent = String(s); return d.innerHTML; }
+  function escAttr(s) { if (s == null) return ''; return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+  var _thumbCache = {};
+
+  function pickThumb(t) {
+    if (!t) return '';
+    var key = (t.videoId || t.id || t.browseId || '') + '|' + (t.title || t.name || '');
+    if (_thumbCache[key]) return _thumbCache[key];
+
+    var list = [];
+
+    if (t.thumbnails && Array.isArray(t.thumbnails)) {
+      t.thumbnails.forEach(function (th) {
+        var u = typeof th === 'string' ? th : (th.url || '');
+        var w = typeof th === 'object' ? (th.width || 0) : 0;
+        var h = typeof th === 'object' ? (th.height || 0) : 0;
+        if (u) list.push({ url: u, w: w, h: h });
+      });
+    }
+
+    if (t.thumbnail) list.push({ url: t.thumbnail, w: 0, h: 0 });
+    if (t.cover) list.push({ url: t.cover, w: 0, h: 0 });
+
+    if (!list.length) { _thumbCache[key] = ''; return ''; }
+
+    var best = null;
+    var bestScore = -1;
+
+    list.forEach(function (x) {
+      var url = String(x.url);
+      if (!/^https?:\/\//i.test(url) && !/^data:image\//i.test(url) && !/^\//.test(url)) return;
+
+      var score = 0;
+      if (x.w > 0 && x.h > 0) {
+        var ratio = x.w / x.h;
+        var squareDiff = Math.abs(ratio - 1);
+        score -= squareDiff * 100;
+        score += Math.min(x.w, 1000) / 10;
+      } else {
+        score -= 5;
+      }
+      var u = url.toLowerCase();
+      if (u.indexOf('=w544-h544') !== -1 || u.indexOf('=w800-h800') !== -1) score += 50;
+      if (u.indexOf('=w226-h226') !== -1) score += 20;
+      if (u.indexOf('=w576-h576') !== -1) score += 30;
+      if (u.indexOf('hqdefault') !== -1) score -= 10;
+      if (u.indexOf('maxresdefault') !== -1) score += 30;
+      if (u.indexOf('sddefault') !== -1) score -= 5;
+      if (score > bestScore) { bestScore = score; best = url; }
+    });
+
+    if (best && best.indexOf('i.ytimg.com/vi/') !== -1) {
+      best = best.replace('i.ytimg.com/vi/', 'i.ytimg.com/vi_webp/').replace(/(hqdefault|mqdefault|sddefault|default)\.(jpg|jpeg|png)/i, 'hqdefault.webp');
+    }
+
+    best = best || '';
+    _thumbCache[key] = best;
+    return best;
+  }
+
+  window.pickThumb = pickThumb;
+
+  var POPULAR = [
+    'Trending 2026',
+    'Lagu Indonesia Populer',
+    'Viral TikTok',
+    'Top Hits Global',
+    'K-Pop Hits',
+    'Chill Lofi',
+    'Pop Indonesia',
+    'Dangdut Koplo',
+    'EDM Party',
+    'Romantis',
+    'Nostalgia 2000an',
+    'Gaming Music'
+  ];
+
+  var SUGGEST_TRIGGER = [
+    'lagu', 'pop', 'rock', 'jazz', 'kpop', 'dangdut', 'lofi', 'chill',
+    'romantis', 'sedih', 'galau', 'semangat', 'party', 'study', 'tidur'
+  ];
+
+  var Search = {
+    filter: 'songs',
+    _songs: [], _artists: [], _albums: [],
+    _abortSuggest: null,
+    _abortSearch: null,
+    _suggestTimer: null,
+    _suggestCache: {},
+    _lastQuery: '',
+
+    render: function () {
+      var el = gid('view-search');
+      if (!el) return;
+      el.style.display = 'block';
+      if (el.dataset.rendered) return;
+      el.dataset.rendered = '1';
+
+      el.innerHTML =
+        '<section style="padding:90px 20px 12px;">' +
+          '<h1 style="font-size:26px;font-weight:900;color:#fff;margin-bottom:16px;">Cari</h1>' +
+          '<form id="search-form" style="position:relative;">' +
+            '<input id="search-input" type="text" placeholder="Cari lagu, artis, album..." autocomplete="off" style="width:100%;padding:14px 100px 14px 20px;border-radius:999px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);color:#fff;font-size:14px;outline:none;">' +
+            '<button type="submit" style="position:absolute;right:5px;top:50%;transform:translateY(-50%);padding:10px 20px;border-radius:999px;background:#fff;color:#050505;font-weight:800;font-size:12px;border:none;cursor:pointer;">Cari</button>' +
+          '</form>' +
+          '<div id="suggest-box" style="display:none;margin-top:10px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:14px;padding:8px 0;"></div>' +
+          '<div id="filter-tabs" style="display:none;gap:6px;margin-top:16px;flex-wrap:wrap;">' +
+            '<button class="filter-btn active" data-f="songs" onclick="Search.setFilter(\'songs\')">Musik</button>' +
+            '<button class="filter-btn" data-f="artists" onclick="Search.setFilter(\'artists\')">Artis</button>' +
+            '<button class="filter-btn" data-f="albums" onclick="Search.setFilter(\'albums\')">Album</button>' +
+          '</div>' +
+        '</section>' +
+        '<div id="search-results" style="padding:0 20px 40px;"></div>';
+
+      var form = gid('search-form');
+      if (form) form.addEventListener('submit', this.onSubmit.bind(this));
+
+      var input = gid('search-input');
+      if (input) {
+        input.addEventListener('input', this.onInput.bind(this));
+        input.addEventListener('focus', this.onInput.bind(this));
+      }
+
+      this.renderDefault();
+    },
+
+    renderDefault: function () {
+      var res = gid('search-results');
+      if (!res) return;
+      res.innerHTML =
+        '<div style="margin-top:8px;">' +
+          '<div style="font-size:11px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;color:rgba(255,255,255,0.5);margin-bottom:12px;">Trending Sekarang</div>' +
+          '<div class="search-grid" id="popular-grid"></div>' +
+        '</div>';
+      var grid = gid('popular-grid');
+      if (!grid) return;
+      grid.innerHTML = POPULAR.slice(0, 6).map(function (q) {
+        return '<div class="search-card" onclick="Search.quickQuery(\'' + escAttr(q) + '\')">' +
+          '<div class="search-card-img" style="background:linear-gradient(135deg,#1a1a1a,#0a0a0a);display:flex;align-items:center;justify-content:center;">' +
+            '<svg viewBox="0 0 24 24" style="width:40%;height:40%;stroke:rgba(255,255,255,0.3);fill:none;stroke-width:1.5;">' +
+              '<circle cx="11" cy="11" r="11"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>' +
+            '</svg>' +
+          '</div>' +
+          '<div class="search-card-title">' + es(q) + '</div>' +
+          '<div class="search-card-sub">Trending</div>' +
+        '</div>';
+      }).join('');
+    },
+
+    onInput: function () {
+      var input = gid('search-input');
+      if (!input) return;
+      var q = input.value.trim();
+      var box = gid('suggest-box');
+      if (!box) return;
+
+      clearTimeout(this._suggestTimer);
+
+      if (q.length < 2) {
+        box.style.display = 'none';
+        if (q.length === 0) this.renderDefault();
+        return;
+      }
+
+      var self = this;
+      this._suggestTimer = setTimeout(function () {
+        self.fetchSuggest(q);
+      }, 300);
+    },
+
+    fetchSuggest: function (q) {
+      var box = gid('suggest-box');
+      if (!box) return;
+      var key = q.toLowerCase();
+      if (this._suggestCache[key] && this._suggestCache[key].exp > Date.now()) {
+        this.renderSuggest(this._suggestCache[key].data, q);
+        return;
+      }
+      var self = this;
+      if (this._abortSuggest) try { this._abortSuggest.abort(); } catch (e) {}
+      this._abortSuggest = new AbortController();
+
+      fetch(window.MALZ_CONFIG.api + 'suggest&query=' + encodeURIComponent(q), { signal: this._abortSuggest.signal })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          var items = [];
+          if (Array.isArray(d)) items = d;
+          else if (d && Array.isArray(d.result)) items = d.result;
+          else if (d && d.result && Array.isArray(d.result.suggestions)) items = d.result.suggestions;
+          self._suggestCache[key] = { data: items, exp: Date.now() + 60000 };
+          self.renderSuggest(items, q);
+        })
+        .catch(function (e) {
+          if (e && e.name === 'AbortError') return;
+          self.renderSuggest(self.fallbackSuggest(q), q);
+        });
+    },
+
+    fallbackSuggest: function (q) {
+      var lower = q.toLowerCase();
+      var out = [];
+      SUGGEST_TRIGGER.forEach(function (word) {
+        if (word.indexOf(lower) !== -1 || lower.indexOf(word) !== -1) out.push(q + ' ' + word);
+      });
+      POPULAR.forEach(function (p) {
+        if (p.toLowerCase().indexOf(lower) !== -1) out.push(p);
+      });
+      if (out.length === 0) {
+        out.push(q);
+        out.push(q + ' viral');
+        out.push(q + ' populer');
+      }
+      return out.slice(0, 6);
+    },
+
+    renderSuggest: function (items, q) {
+      var box = gid('suggest-box');
+      if (!box) return;
+      if (!items || !items.length) { box.style.display = 'none'; return; }
+      box.innerHTML = items.slice(0, 8).map(function (s) {
+        var text = typeof s === 'string' ? s : (s.title || s.query || s.name || '');
+        if (!text) return '';
+        return '<div class="suggest-item" onclick="Search.quickQuery(\'' + escAttr(text) + '\')" style="display:flex;align-items:center;gap:12px;padding:12px 18px;cursor:pointer;transition:background .2s;" onmouseover="this.style.background=\'rgba(255,255,255,0.05)\'" onmouseout="this.style.background=\'transparent\'">' +
+          '<svg viewBox="0 0 24 24" style="width:16px;height:16px;stroke:rgba(255,255,255,0.4);fill:none;stroke-width:2;flex-shrink:0;">' +
+            '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>' +
+          '</svg>' +
+          '<span style="font-size:13px;color:rgba(255,255,255,0.8);">' + es(text) + '</span>' +
+          '<svg viewBox="0 0 24 24" style="width:14px;height:14px;stroke:rgba(255,255,255,0.2);fill:none;stroke-width:2;margin-left:auto;flex-shrink:0;">' +
+            '<polyline points="9 18 15 12 9 6"/>' +
+          '</svg>' +
+        '</div>';
+      }).join('');
+      box.style.display = 'block';
+    },
+
+    quickQuery: function (q) {
+      var input = gid('search-input');
+      if (input) input.value = q;
+      var box = gid('suggest-box');
+      if (box) box.style.display = 'none';
+      var tabs = gid('filter-tabs');
+      if (tabs) tabs.style.display = 'flex';
+      this.fetchAll(q);
+    },
+
+    onSubmit: function (e) {
+      e.preventDefault();
+      var q = (gid('search-input').value || '').trim();
+      if (!q) return;
+      var box = gid('suggest-box');
+      if (box) box.style.display = 'none';
+      var tabs = gid('filter-tabs');
+      if (tabs) tabs.style.display = 'flex';
+      this.fetchAll(q);
+    },
+
+    setFilter: function (f) {
+      this.filter = f;
+      var btns = document.querySelectorAll('#filter-tabs .filter-btn');
+      for (var i = 0; i < btns.length; i++) btns[i].classList.toggle('active', btns[i].getAttribute('data-f') === f);
+      this.show();
+    },
+
+    fetchAll: function (q) {
+      var res = gid('search-results');
+      if (res) res.innerHTML = '<p style="color:rgba(255,255,255,0.5);text-align:center;padding:40px 0;">Memuat...</p>';
+      if (this._abortSearch) try { this._abortSearch.abort(); } catch (e) {}
+      this._abortSearch = new AbortController();
+
+      var self = this;
+      this._lastQuery = q;
+
+      fetch(window.MALZ_CONFIG.api + 'search&query=' + encodeURIComponent(q) + '&type=all', { signal: this._abortSearch.signal })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          var s = self.normalize(d);
+          self._songs = s.songs;
+          self._artists = s.artists;
+          self._albums = s.albums;
+          self.show();
+        })
+        .catch(function (e) {
+          if (e && e.name === 'AbortError') return;
+          self._songs = [];
+          self._artists = [];
+          self._albums = [];
+          var res = gid('search-results');
+          if (res) res.innerHTML = '<p style="color:rgba(255,255,255,0.5);text-align:center;padding:40px 0;">Tidak dapat memuat hasil. Cuba lagi.</p>';
+        });
+    },
+
+    normalize: function (d) {
+      var out = { songs: [], artists: [], albums: [] };
+      if (!d) return out;
+      var r = d.result || d.data || d;
+      if (Array.isArray(r)) { out.songs = r; return out; }
+      if (r.result && typeof r.result === 'object') r = r.result;
+      if (r.songs && Array.isArray(r.songs)) out.songs = r.songs;
+      if (r.tracks && Array.isArray(r.tracks)) out.songs = r.tracks;
+      if (r.items && Array.isArray(r.items) && !out.songs.length) out.songs = r.items;
+      if (r.artists && Array.isArray(r.artists)) out.artists = r.artists;
+      if (r.albums && Array.isArray(r.albums)) out.albums = r.albums;
+      if (r.playlists && Array.isArray(r.playlists)) out.albums = out.albums.concat(r.playlists);
+      if (r.data && typeof r.data === 'object') {
+        if (r.data.songs && Array.isArray(r.data.songs) && !out.songs.length) out.songs = r.data.songs;
+        if (r.data.artists && Array.isArray(r.data.artists) && !out.artists.length) out.artists = r.data.artists;
+        if (r.data.albums && Array.isArray(r.data.albums) && !out.albums.length) out.albums = r.data.albums;
+      }
+      return out;
+    },
+
+    show: function () {
+      var el = gid('search-results');
+      if (!el) return;
+      var FI = window.Player ? Player.FI : '';
+      var list = this.filter === 'songs' ? this._songs : (this.filter === 'artists' ? this._artists : this._albums);
+
+      if (!list.length) {
+        var other = (this.filter === 'songs') ? (this._artists.length + this._albums.length) :
+                    (this.filter === 'artists') ? (this._songs.length + this._albums.length) :
+                    (this._songs.length + this._artists.length);
+        if (other > 0) {
+          var tabs = gid('filter-tabs');
+          if (tabs) tabs.style.display = 'flex';
+          var best = this._songs.length ? 'songs' : (this._artists.length ? 'artists' : 'albums');
+          this.filter = best;
+          var btns = document.querySelectorAll('#filter-tabs .filter-btn');
+          for (var i = 0; i < btns.length; i++) btns[i].classList.toggle('active', btns[i].getAttribute('data-f') === best);
+          list = best === 'songs' ? this._songs : (best === 'artists' ? this._artists : this._albums);
+        }
+      }
+
+      if (!list.length) {
+        el.innerHTML = '<div style="text-align:center;padding:40px 20px;">' +
+          '<svg viewBox="0 0 24 24" style="width:48px;height:48px;stroke:rgba(255,255,255,0.2);fill:none;stroke-width:1.5;margin:0 auto 16px;display:block;">' +
+            '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>' +
+          '</svg>' +
+          '<p style="color:rgba(255,255,255,0.5);font-size:14px;margin-bottom:4px;">Tiada hasil untuk "' + es(this._lastQuery) + '"</p>' +
+          '<p style="color:rgba(255,255,255,0.3);font-size:12px;">Cuba kata kunci lain</p>' +
+        '</div>';
+        return;
+      }
+
+      var self = this;
+      el.innerHTML = '<div class="search-grid">' + list.map(function (t, i) {
+        var cover = pickThumb(t) || FI;
+        var title = t.title || t.name || 'Unknown';
+        var artist = t.artist || t.subtitle || '';
+        var cb = self.filter === 'songs' ? 'Search.playSong' : (self.filter === 'artists' ? 'Search.playArtist' : 'Search.playAlbum');
+        var key = escAttr(t.videoId || t.id || '');
+        var isSong = self.filter === 'songs';
+        var likeBtn = isSong ? '<button class="card-like" type="button" aria-label="Suka" data-vid="' + key + '" data-title="' + escAttr(title) + '" data-artist="' + escAttr(artist) + '" data-cover="' + escAttr(cover) + '" onclick="event.stopPropagation()"><svg viewBox="0 0 24 24" fill="none"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg></button>' : '';
+        return '<div class="search-card" data-track-id="' + key + '" style="--i:' + i + '" onclick="' + cb + '(' + i + ')">' +
+          '<div class="search-card-img"><img src="' + escAttr(cover) + '" alt="' + escAttr(title) + '" loading="lazy" onerror="this.onerror=null;this.src=\'' + escAttr(FI) + '\'">' + likeBtn + '<button class="card-more" type="button" aria-label="Menu" onclick="event.stopPropagation();Search.openMenu(' + i + ')">&#8942;</button></div>' +
+          '<div class="search-card-title">' + es(title) + '</div>' +
+          (artist ? '<div class="search-card-sub">' + es(artist) + '</div>' : '') +
+        '</div>';
+      }).join('') + '</div>';
+    },
+
+    openMenu: function (i) {
+      var t = this._songs[i]; if (!t) return;
+      var trackUrl = 'https://malz-official.com/music/watch.php?id=' + encodeURIComponent(t.videoId || t.id || '') + '&title=' + encodeURIComponent(t.title || '') + '&artist=' + encodeURIComponent(t.artist || '');
+      var text = (t.title || 'Lagu') + ' — ' + (t.artist || 'Malz-Musify') + '\n' + trackUrl;
+      var old = document.getElementById('search-track-menu'); if (old) old.remove(); var m = document.createElement('div'); m.id='search-track-menu'; m.className='track-menu'; m.innerHTML='<div class="track-menu-backdrop"></div><div class="track-menu-box"><b>'+es(t.title||'Lagu')+'</b><button data-action="copy">Copy link</button><button data-action="share">Share link</button><button data-action="play">Putar</button><button data-action="close">Tutup</button></div>';
+      document.body.appendChild(m);
+      m.querySelector('[data-action="copy"]').onclick=function(){navigator.clipboard.writeText(trackUrl);};
+      m.querySelector('[data-action="share"]').onclick=function(){if(navigator.share)navigator.share({title:t.title||'Lagu',url:trackUrl});else navigator.clipboard.writeText(trackUrl);};
+      m.querySelector('[data-action="play"]').onclick=function(){Search.playSong(i);m.remove();};
+      m.querySelector('[data-action="close"]').onclick=function(){m.remove();};
+      m.querySelector('.track-menu-backdrop').onclick=function(){m.remove();};
+    },
+
+    playSong: function (i) {
+      var list = this._songs.map(function (s) {
+        var vid = s.videoId || s.id;
+        return {
+          id: vid,
+          videoId: vid,
+          title: s.title || s.name,
+          artist: s.artist || '',
+          cover: pickThumb(s),
+          artistId: s.artistId || '',
+          ytUrl: s.url || ('https://youtube.com/watch?v=' + vid)
+        };
+      });
+      if (list[i] && window.Player) Player.playIndex(list, i, 'search');
+      if (window.FullPlayer && FullPlayer.open) FullPlayer.open();
+    },
+
+    playArtist: function (i) {
+      var a = this._artists[i];
+      if (a && window.Artist) Artist.open(a.id || a.artistId || a.browseId, a.title || a.name, pickThumb(a));
+    },
+
+    playAlbum: function (i) {
+      var a = this._albums[i];
+      if (a && window.Album) Album.open(a.id || a.browseId || a.albumId, pickThumb(a));
+    }
+  };
+
+  window.Search = Search;
+
+})();

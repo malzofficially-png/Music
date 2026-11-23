@@ -1,0 +1,1406 @@
+(function () {
+  'use strict';
+
+  var FI = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="#18181b"/><circle cx="50" cy="50" r="30" fill="#27272a"/><path d="M40 65V35l25-5v30" stroke="#52525b" stroke-width="3" fill="none"/><circle cx="35" cy="65" r="6" fill="#52525b"/><circle cx="60" cy="60" r="6" fill="#52525b"/></svg>'
+  );
+
+  function gid(id) { return document.getElementById(id); }
+  function fm(s) { if (!isFinite(s)) return '0:00'; var m = Math.floor(s / 60), se = Math.floor(s % 60); return m + ':' + (se < 10 ? '0' : '') + se; }
+  function cn(t) { if (!t) return 'Unknown'; return String(t).replace(/[^\x20-\x7E\xA0-\xFF\u0100-\uFFFF]/g, '').replace(/\s*-\s*Topic$/i, '').trim() || 'Unknown'; }
+  function toHDCover(url, videoId) {
+    if (!url && videoId) return 'https://i.ytimg.com/vi_webp/' + videoId + '/hqdefault.webp';
+    if (!url) return FI;
+    var u = String(url);
+    if (u.indexOf('i.ytimg.com/vi/') !== -1) u = u.replace('i.ytimg.com/vi/', 'i.ytimg.com/vi_webp/').replace(/(hqdefault|mqdefault|sddefault|default|maxresdefault)\.(jpg|jpeg|png)/i, 'hqdefault.webp');
+    return u;
+  }
+  function esc(s) { var d = document.createElement('div'); d.textContent = String(s == null ? '' : s); return d.innerHTML; }
+
+  var AUDIO_HOST_WHITELIST = [
+    'savetube.vip',
+    'googlevideo.com',
+    'youtube.com',
+    'ytimg.com',
+    'googleusercontent.com',
+    'ggpht.com'
+  ];
+
+  function isAllowedAudioHost(url) {
+    try {
+      var u = new URL(url);
+      var host = u.hostname.toLowerCase();
+      for (var i = 0; i < AUDIO_HOST_WHITELIST.length; i++) {
+        var w = AUDIO_HOST_WHITELIST[i];
+        if (host === w || host.slice(-w.length - 1) === '.' + w) return true;
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function extractAudioUrl(d) {
+    if (!d) return '';
+    if (typeof d === 'string' && /^https?:\/\//i.test(d)) return d;
+
+    var candidates = [
+      d.url, d.audio, d.download, d.link,
+      d.result && d.result.url,
+      d.result && d.result.audio,
+      d.result && d.result.link,
+      d.result && typeof d.result.download === 'string' ? d.result.download : null,
+      d.result && d.result.download && d.result.download.audio,
+      d.result && d.result.download && d.result.download.url,
+      d.result && d.result.downloads && d.result.downloads.audio,
+      d.result && d.result.formats && Array.isArray(d.result.formats) ? d.result.formats[0] : null,
+      d.data && d.data.url,
+      d.data && d.data.audio,
+      d.data && d.data.download && d.data.download.audio
+    ];
+
+    var strict = '';
+    for (var i = 0; i < candidates.length; i++) {
+      var v = candidates[i];
+      if (typeof v === 'string' && /^https?:\/\//i.test(v) && isAllowedAudioHost(v)) {
+        strict = v;
+        break;
+      }
+    }
+    if (strict) return strict;
+
+    for (var j = 0; j < candidates.length; j++) {
+      var v2 = candidates[j];
+      if (typeof v2 === 'string' && /^https?:\/\//i.test(v2)) return v2;
+    }
+
+    return '';
+  }
+
+  var S = {
+    ct: null, pl: [], pi: -1, ip: false, il: false,
+    rm: 'off', isShuffle: false, autoNext: true,
+    pt: 0, pd: 0, vol: 1, lastVol: 1,
+    ld: { vid: '', type: 'none', lines: [] }, cli: -1,
+    sleepSec: 0, sleepTimer: null, rate: 1.0,
+    failStreak: 0
+  };
+
+  var audioUrlCache = {};
+  try { audioUrlCache = JSON.parse(localStorage.getItem('malz_audio_cache') || '{}'); } catch (e) {}
+  var lyricsCache = {};
+  try { lyricsCache = JSON.parse(localStorage.getItem('malz_lyrics_cache') || '{}'); } catch (e) {}
+  try {
+    var v = parseFloat(localStorage.getItem('malz_vol'));
+    if (!isNaN(v) && v >= 0 && v <= 1) S.vol = v;
+    S.lastVol = S.vol > 0 ? S.vol : 1;
+    var r = parseFloat(localStorage.getItem('malz_rate'));
+    if (!isNaN(r) && r > 0) S.rate = r;
+  } catch (e) {}
+
+  function saveCaches() {
+    try {
+      var k = Object.keys(lyricsCache);
+      if (k.length > 60) {
+        var sorted = k.map(function (key) {
+          var e = lyricsCache[key];
+          return { k: key, t: (e && e.ts) || 0 };
+        }).sort(function (a, b) { return a.t - b.t; });
+        for (var i = 0; i < sorted.length - 60; i++) delete lyricsCache[sorted[i].k];
+      }
+      localStorage.setItem('malz_lyrics_cache', JSON.stringify(lyricsCache));
+
+      var k2 = Object.keys(audioUrlCache);
+      if (k2.length > 60) {
+        var sorted2 = k2.map(function (key) {
+          var e = audioUrlCache[key];
+          return { k: key, t: (e && e.ts) || 0 };
+        }).sort(function (a, b) { return a.t - b.t; });
+        for (var j = 0; j < sorted2.length - 60; j++) delete audioUrlCache[sorted2[j].k];
+      }
+      localStorage.setItem('malz_audio_cache', JSON.stringify(audioUrlCache));
+    } catch (e) {}
+  }
+
+  var AU = null;
+  var currentLoadToken = 0;
+
+  var Player = {
+    S: S, FI: FI, fm: fm, cn: cn, toHDCover: toHDCover,
+    _lyricsAbort: null,
+
+    init: function () {
+      AU = gid('audio');
+      if (!AU) {
+        AU = document.createElement('audio');
+        AU.id = 'audio';
+        AU.preload = 'auto';
+        document.body.appendChild(AU);
+      }
+      AU.volume = S.vol;
+      try { AU.playbackRate = S.rate; } catch (e) {}
+
+      AU.addEventListener('timeupdate', function () {
+        if (!AU.paused) {
+          S.pt = AU.currentTime || 0;
+          S.pd = AU.duration || 0;
+          Player.renderProgress();
+          Player.updateLyricsHighlight(S.pt);
+        }
+      });
+      AU.addEventListener('play', function () { S.ip = true; S.il = false; Player.updateUI(); Player.mediaState('playing'); });
+      AU.addEventListener('pause', function () { if (!AU.ended) { S.ip = false; S.il = false; Player.updateUI(); Player.mediaState('paused'); } });
+      AU.addEventListener('waiting', function () { S.il = true; Player.updateUI(); });
+      AU.addEventListener('playing', function () { S.il = false; Player.updateUI(); });
+      AU.addEventListener('loadedmetadata', function () { S.pd = AU.duration || 0; Player.renderProgress(); });
+      AU.addEventListener('ended', function () {
+        if (S.rm === 'one') { AU.currentTime = 0; AU.play().catch(function () {}); }
+        else if (S.autoNext) Player.next();
+        else { S.ip = false; Player.updateUI(); }
+      });
+      AU.addEventListener('error', function () {
+        if (!AU.src) return;
+        var vid = S.ct ? (S.ct.videoId || S.ct.id) : null;
+        if (vid && audioUrlCache[vid]) { delete audioUrlCache[vid]; saveCaches(); }
+        if (S.il) { S.il = false; S.ip = false; Player.updateUI(); }
+        var src = AU.currentSrc || AU.src || '';
+        if (vid && src.indexOf('/music/audio') !== -1 && AU.error && AU.error.code !== 1) {
+          var n = (AU._retry || 0);
+          if (n < 2) {
+            AU._retry = n + 1;
+            var retryCt = S.ct;
+            var retryTok = currentLoadToken;
+            setTimeout(function () {
+              if (S.ct !== retryCt) return;
+              if (retryTok !== currentLoadToken) return;
+              Player.playUrl('/music/audio?id=' + encodeURIComponent(vid) + '&r=' + Date.now(), retryCt, retryTok);
+            }, 400 * (n + 1));
+          }
+        }
+      });
+      AU.addEventListener('playing', function () {
+        AU._retry = 0;
+        Player._prefetchNext();
+      });
+      AU.addEventListener('volumechange', function () { Player.updateVolumeUI(); });
+
+      if ('mediaSession' in navigator) {
+        try {
+          navigator.mediaSession.setActionHandler('play', function () { Player.toggle(); });
+          navigator.mediaSession.setActionHandler('pause', function () { Player.toggle(); });
+          navigator.mediaSession.setActionHandler('previoustrack', function () { Player.prev(true); });
+          navigator.mediaSession.setActionHandler('nexttrack', function () { Player.next(); });
+          navigator.mediaSession.setActionHandler('seekto', function (d) {
+            if (AU.duration && isFinite(d.seekTime)) {
+              var t = Math.max(0, Math.min(AU.duration, d.seekTime));
+              AU.currentTime = t; S.pt = t; Player.renderProgress();
+            }
+          });
+        } catch (e) {}
+      }
+
+      document.addEventListener('click', Player._delegatedClick, true);
+    },
+
+    _delegatedClick: function (e) {
+      var target = e.target;
+      if (!target || !target.closest) return;
+
+      var playBtn = target.closest('#mini-play-btn, #fp-play-btn, #pPlayBtn');
+      if (playBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        Player.toggle();
+        return;
+      }
+
+      var prevBtn = target.closest('#mini-prev-btn, #fp-prev-btn');
+      if (prevBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        Player.prev();
+        return;
+      }
+
+      var nextBtn = target.closest('#mini-next-btn, #fp-next-btn');
+      if (nextBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        Player.next();
+        return;
+      }
+
+      var volBtn = target.closest('#mini-vol-btn');
+      if (volBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        Player.toggleMute();
+        return;
+      }
+    },
+
+    mediaState: function (state) {
+      if (!('mediaSession' in navigator)) return;
+      try { navigator.mediaSession.playbackState = state; } catch (e) {}
+    },
+
+    _stopAudio: function () {
+      if (!AU) return;
+      try { AU.pause(); } catch (e) {}
+      AU.removeAttribute('src');
+      try { AU.load(); } catch (e) {}
+      S.pt = 0;
+      S.pd = 0;
+      S.ip = false;
+      S.il = false;
+    },
+
+    load: function (track) {
+      if (!track) return;
+      currentLoadToken++;
+      var myToken = currentLoadToken;
+
+      var oldVid = S.ct ? (S.ct.videoId || S.ct.id) : null;
+      var newVid = track.videoId || track.id;
+
+      if (oldVid !== newVid) {
+        this._stopAudio();
+      }
+
+      S.ct = track;
+      S.pt = 0; S.pd = 0; S.il = true; S.ip = false;
+
+      this.updateUI();
+      this.updateMedia(track);
+      this.renderProgress();
+
+      if (window.MP) {
+        if (MP.update) MP.update(track);
+        if (MP.show) MP.show();
+      }
+
+      var fpEl = gid('full-player');
+      if (fpEl && window.FullPlayer && FullPlayer.isOpen() && FullPlayer.refresh) {
+        FullPlayer.refresh(track);
+      }
+
+      var vid = newVid;
+      if (!vid) { S.il = false; this.updateUI(); return; }
+
+      if (window.Queue && Queue.get) {
+        var qUrl = Queue.get(vid);
+        if (qUrl) { this.playUrl(qUrl, track, myToken); return; }
+      } else {
+        var cached = audioUrlCache[vid];
+        if (cached && cached.url && cached.exp && cached.exp > Date.now()) {
+          this.playUrl(cached.url, track, myToken);
+          return;
+        }
+        if (cached && (!cached.exp || cached.exp <= Date.now())) {
+          delete audioUrlCache[vid];
+          saveCaches();
+        }
+      }
+
+      var self = this;
+      var ytUrl = track.ytUrl || ('https://youtube.com/watch?v=' + vid);
+
+      if (window.Queue && Queue.fetchAudio) {
+        Queue.fetchAudio(vid, ytUrl)
+          .then(function (url) {
+            if (myToken !== currentLoadToken) return;
+            if (S.ct !== track) return;
+            if (!url) { self.handleFail(track); return; }
+            self.playUrl(url, track, myToken);
+          })
+          .catch(function () {
+            if (myToken !== currentLoadToken) return;
+            if (S.ct !== track) return;
+            self.handleFail(track);
+          });
+        return;
+      }
+
+      var localUrl = window.MALZ_CONFIG.base + '/audio?id=' + encodeURIComponent(vid);
+      self.playUrl(localUrl, track, myToken);
+    },
+
+    handleFail: function (track) {
+      if (S.ct !== track) return;
+      this._stopAudio();
+      this.updateUI();
+      this.renderProgress();
+
+      var vid = track.videoId || track.id;
+      if (vid) {
+        if (window.Queue && Queue.invalidate) Queue.invalidate(vid);
+        if (audioUrlCache[vid]) { delete audioUrlCache[vid]; saveCaches(); }
+      }
+
+      S.failStreak++;
+
+      if (App && App.toast) App.toast('Gagal memuat audio, cuba lagu lain');
+
+      if (S.failStreak >= 5) {
+        S.failStreak = 0;
+        S.autoNext = false;
+        if (App && App.toast) App.toast('Auto-play dimatikan. Cuba manual.');
+        return;
+      }
+
+      if (S.autoNext && S.pl.length > 1 && this._fromAuto) {
+        this._fromAuto = false;
+        var self = this;
+        setTimeout(function () { self.next(); }, 800);
+      }
+    },
+
+    _prefetchNext: function () {
+      if (!S.pl || S.pl.length < 2) return;
+      var ni = S.isShuffle ? Math.floor(Math.random() * S.pl.length) : (S.pi + 1) % S.pl.length;
+      var nt = S.pl[ni];
+      if (!nt) return;
+      var nvid = nt.videoId || nt.id;
+      if (!nvid) return;
+      if (this._pfVid === nvid) return;
+      this._pfVid = nvid;
+      try {
+        fetch('/music/audio?id=' + encodeURIComponent(nvid), { headers: { Range: 'bytes=0-1' } })
+          .then(function (r) { try { r.body && r.body.cancel && r.body.cancel(); } catch (e) {} })
+          .catch(function () {});
+      } catch (e) {}
+    },
+
+    playUrl: function (url, track, token) {
+      if (!AU) return;
+      if (token !== undefined && token !== currentLoadToken) return;
+      if (S.ct !== track) return;
+      if (!url) { this.handleFail(track); return; }
+
+      try { AU.pause(); } catch (e) {}
+      AU.removeAttribute('src');
+      try { AU.load(); } catch (e) {}
+
+      AU.src = url;
+      try { AU.playbackRate = S.rate; } catch (e) {}
+      AU.load();
+
+      var current = track;
+      var myToken = token;
+      var p = AU.play();
+      if (p && p.then) {
+        p.then(function () {
+          if (myToken !== currentLoadToken) return;
+          if (S.ct !== current) return;
+          S.il = false; S.ip = true; S.failStreak = 0;
+          Player.updateUI();
+        }).catch(function () {
+          if (myToken !== currentLoadToken) return;
+          if (S.ct !== current) return;
+          S.il = false; S.ip = false;
+          Player.updateUI();
+          Player.handleFail(current);
+        });
+      } else {
+        S.il = false;
+        S.failStreak = 0;
+        Player.updateUI();
+      }
+    },
+
+    playIndex: function (list, i, source) {
+      if (!list || !list[i]) return;
+      S.pl = list;
+      S.pi = i;
+      var track = list[i];
+      var vid = track.videoId || track.id;
+      var curVid = S.ct ? (S.ct.videoId || S.ct.id) : null;
+
+      if (curVid && curVid === vid && AU && AU.src) {
+        this.toggle();
+        return;
+      }
+
+      S.ld = { vid: vid, type: 'none', lines: [] };
+      S.cli = -1;
+      if (this.renderLyrics) this.renderLyrics();
+
+      this.load(track);
+      this.loadLyrics(vid, track);
+    },
+
+    next: function () {
+      if (!S.pl.length) return;
+      if (S.pl.length === 1) {
+        if (AU) { AU.currentTime = 0; AU.play().catch(function () {}); }
+        return;
+      }
+      var ni;
+      if (S.isShuffle) {
+        var tries = 0;
+        do { ni = Math.floor(Math.random() * S.pl.length); tries++; }
+        while (ni === S.pi && tries < 10);
+      } else {
+        ni = S.pi + 1;
+        if (ni >= S.pl.length) ni = 0;
+      }
+      Player._fromAuto = true;
+      this.playIndex(S.pl, ni, 'player');
+    },
+
+    prev: function (forceRestart) {
+      if (!S.pl.length) return;
+      if (!forceRestart && S.pt > 3 && AU) { AU.currentTime = 0; return; }
+      if (S.pl.length === 1) { if (AU) AU.currentTime = 0; return; }
+      var pi = S.pi - 1;
+      if (pi < 0) pi = S.pl.length - 1;
+      this.playIndex(S.pl, pi, 'player');
+    },
+
+    toggle: function () {
+      if (!S.ct) return;
+
+      if (!AU) AU = gid('audio');
+      if (!AU) return;
+
+      if (!AU.src) {
+        this.load(S.ct);
+        return;
+      }
+
+      if (AU.paused) {
+        S.il = true;
+        this.updateUI();
+        AU.play().then(function () {
+          S.il = false; S.ip = true;
+          Player.updateUI();
+        }).catch(function () {
+          S.il = false; S.ip = false;
+          Player.updateUI();
+        });
+      } else {
+        try { AU.pause(); } catch (e) {}
+        S.ip = false;
+        S.il = false;
+        this.updateUI();
+      }
+    },
+
+    seek: function (v) {
+      if (AU.duration) { AU.currentTime = (parseFloat(v) / 100) * AU.duration; }
+    },
+
+    setVolume: function (v) {
+      var vol = Math.max(0, Math.min(1, parseFloat(v) / 100));
+      if (vol > 0) S.lastVol = vol;
+      S.vol = vol;
+      if (AU) AU.volume = vol;
+      try { localStorage.setItem('malz_vol', String(vol)); } catch (e) {}
+      this.updateVolumeUI();
+    },
+
+    toggleMute: function () {
+      var cur = AU ? AU.volume : S.vol;
+      if (cur > 0) { S.lastVol = cur; this.setVolume(0); }
+      else { this.setVolume((S.lastVol || 1) * 100); }
+    },
+
+    setRate: function (r) {
+      S.rate = parseFloat(r) || 1.0;
+      if (AU) { try { AU.playbackRate = S.rate; } catch (e) {} }
+      try { localStorage.setItem('malz_rate', String(S.rate)); } catch (e) {}
+    },
+
+    toggleRepeat: function () {
+      S.rm = S.rm === 'off' ? 'all' : (S.rm === 'all' ? 'one' : 'off');
+      this.updateRepeatUI();
+      this.pushState();
+      if (App && App.toast) App.toast(S.rm === 'off' ? 'Ulang ditutup' : (S.rm === 'one' ? 'Ulang 1 lagu' : 'Ulang semua'));
+    },
+
+    toggleShuffle: function () {
+      S.isShuffle = !S.isShuffle;
+      this.updateShuffleUI();
+      if (App && App.toast) App.toast(S.isShuffle ? 'Shuffle aktif' : 'Shuffle mati');
+    },
+
+    renderProgress: function () {
+      var p = S.pd > 0 ? (S.pt / S.pd) * 100 : 0;
+      var ids = ['mini-progress', 'mini-progress-fill', 'fp-progress-fill', 'full-progress'];
+      ids.forEach(function (id) { var e = gid(id); if (e) e.style.width = p + '%'; });
+      var sbs = ['seek-bar', 'fp-seek'];
+      sbs.forEach(function (id) { var e = gid(id); if (e) e.value = p; });
+      var tcs = ['time-curr', 'fp-time-curr'];
+      tcs.forEach(function (id) { var e = gid(id); if (e) e.textContent = fm(S.pt); });
+      var tds = ['time-dur', 'fp-time-dur'];
+      tds.forEach(function (id) { var e = gid(id); if (e) e.textContent = fm(S.pd); });
+      var mcp = gid('mini-circle-progress');
+      if (mcp) { var tot = 131.95; mcp.style.strokeDashoffset = Math.max(0, tot * (1 - p / 100)); }
+    },
+
+    updateVolumeUI: function () {
+      var vol = AU ? AU.volume : S.vol;
+      var pct = Math.round(vol * 100);
+      var vols = ['vol-bar', 'fp-vol'];
+      vols.forEach(function (id) { var e = gid(id); if (e) e.value = pct; });
+      var fills = ['fp-vol-fill', 'full-vol-progress'];
+      fills.forEach(function (id) { var e = gid(id); if (e) e.style.width = pct + '%'; });
+      var texts = ['fp-vol-text', 'full-vol-text'];
+      texts.forEach(function (id) { var e = gid(id); if (e) e.textContent = pct + '%'; });
+      var icons = ['mini-vol-icon', 'fp-vol-icon', 'full-vol-icon'];
+      icons.forEach(function (id) {
+        var el = gid(id);
+        if (!el) return;
+        var html;
+        if (pct === 0) html = '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>';
+        else if (pct < 35) html = '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>';
+        else html = '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>';
+        el.innerHTML = html;
+      });
+    },
+
+    updateUI: function () {
+      var icon;
+      if (S.il) {
+        icon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="pointer-events:none"><circle cx="12" cy="12" r="9" stroke-dasharray="6 4"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.8s" repeatCount="indefinite"/></circle></svg>';
+      } else if (S.ip) {
+        icon = '<svg viewBox="0 0 24 24" fill="currentColor" style="pointer-events:none"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>';
+      } else {
+        icon = '<svg viewBox="0 0 24 24" fill="currentColor" style="pointer-events:none"><polygon points="6 3 20 12 6 21 6 3"/></svg>';
+      }
+
+      ['mini-play-btn', 'pPlayBtn', 'fp-play-btn'].forEach(function (id) {
+        var e = gid(id);
+        if (!e) return;
+        e.innerHTML = icon;
+      });
+    },
+
+    updateMedia: function (track) {
+      if (!('mediaSession' in navigator)) return;
+      try {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: track.title || 'Malz-Musify',
+          artist: track.artist || '',
+          album: 'Malz-Musify',
+          artwork: [{ src: track.cover || FI, sizes: '512x512', type: 'image/webp' }]
+        });
+      } catch (e) {}
+    },
+
+        
+    window.malzGetState = function () {
+      try {
+        var c = (window.S && S.ct) || null;
+        var cov = window.malzGetThumb ? window.malzGetThumb(c) : (c && c.cover) || '';
+        return {
+          playing: !!window.AU && AU && !AU.paused,
+          cover: cov,
+          title: c ? (c.title || c.name || '') : '',
+          artist: c ? (c.artist || '') : '',
+          vid: c ? (c.videoId || c.id || '') : '',
+          posMs: Math.round(((window.S && S.pt) || 0) * 1000),
+          durMs: Math.round(((window.S && S.pd) || 0) * 1000),
+          repeat: (window.S && S.rm) || 'off',
+          shuffle: !!window.S && S.isShuffle,
+          lyrics: (function () {
+            var ld = window.S && S.ld;
+            if (!ld || !ld.lines || !ld.lines.length) return null;
+            return JSON.stringify(ld.lines.map(function (l) {
+              return { t: l.time||0, t: l.time||0, text: l.text||'' };
+            }));
+          })()
+        };
+      } catch (e) { return null; }
+    };
+
+updateRepeatUI: function () {
+      var rm = S.rm;
+      var icon = 'all';
+      if (rm === 'one') icon = 'one';
+      else if (rm === 'off') icon = 'off';
+      var ids = ['mini-repeat', 'fp-repeat', 'full-repeat'];
+      ids.forEach(function (id) { var e = gid(id); if (e) { e.innerHTML = REPEAT_ICONS[icon]; e.dataset.rm = rm; } });
+    },on () {
+  'use strict';
+
+  var FI = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="#18181b"/><circle cx="50" cy="50" r="30" fill="#27272a"/><path d="M40 65V35l25-5v30" stroke="#52525b" stroke-width="3" fill="none"/><circle cx="35" cy="65" r="6" fill="#52525b"/><circle cx="60" cy="60" r="6" fill="#52525b"/></svg>'
+  );
+
+  function gid(id) { return document.getElementById(id); }
+  function fm(s) { if (!isFinite(s)) return '0:00'; var m = Math.floor(s / 60), se = Math.floor(s % 60); return m + ':' + (se < 10 ? '0' : '') + se; }
+  function cn(t) { if (!t) return 'Unknown'; return String(t).replace(/[^\x20-\x7E\xA0-\xFF\u0100-\uFFFF]/g, '').replace(/\s*-\s*Topic$/i, '').trim() || 'Unknown'; }
+  function toHDCover(url, videoId) {
+    if (!url && videoId) return 'https://i.ytimg.com/vi_webp/' + videoId + '/hqdefault.webp';
+    if (!url) return FI;
+    var u = String(url);
+    if (u.indexOf('i.ytimg.com/vi/') !== -1) u = u.replace('i.ytimg.com/vi/', 'i.ytimg.com/vi_webp/').replace(/(hqdefault|mqdefault|sddefault|default|maxresdefault)\.(jpg|jpeg|png)/i, 'hqdefault.webp');
+    return u;
+  }
+  function esc(s) { var d = document.createElement('div'); d.textContent = String(s == null ? '' : s); return d.innerHTML; }
+
+  var AUDIO_HOST_WHITELIST = [
+    'savetube.vip',
+    'googlevideo.com',
+    'youtube.com',
+    'ytimg.com',
+    'googleusercontent.com',
+    'ggpht.com'
+  ];
+
+  function isAllowedAudioHost(url) {
+    try {
+      var u = new URL(url);
+      var host = u.hostname.toLowerCase();
+      for (var i = 0; i < AUDIO_HOST_WHITELIST.length; i++) {
+        var w = AUDIO_HOST_WHITELIST[i];
+        if (host === w || host.slice(-w.length - 1) === '.' + w) return true;
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function extractAudioUrl(d) {
+    if (!d) return '';
+    if (typeof d === 'string' && /^https?:\/\//i.test(d)) return d;
+
+    var candidates = [
+      d.url, d.audio, d.download, d.link,
+      d.result && d.result.url,
+      d.result && d.result.audio,
+      d.result && d.result.link,
+      d.result && typeof d.result.download === 'string' ? d.result.download : null,
+      d.result && d.result.download && d.result.download.audio,
+      d.result && d.result.download && d.result.download.url,
+      d.result && d.result.downloads && d.result.downloads.audio,
+      d.result && d.result.formats && Array.isArray(d.result.formats) ? d.result.formats[0] : null,
+      d.data && d.data.url,
+      d.data && d.data.audio,
+      d.data && d.data.download && d.data.download.audio
+    ];
+
+    var strict = '';
+    for (var i = 0; i < candidates.length; i++) {
+      var v = candidates[i];
+      if (typeof v === 'string' && /^https?:\/\//i.test(v) && isAllowedAudioHost(v)) {
+        strict = v;
+        break;
+      }
+    }
+    if (strict) return strict;
+
+    for (var j = 0; j < candidates.length; j++) {
+      var v2 = candidates[j];
+      if (typeof v2 === 'string' && /^https?:\/\//i.test(v2)) return v2;
+    }
+
+    return '';
+  }
+
+  var S = {
+    ct: null, pl: [], pi: -1, ip: false, il: false,
+    rm: 'off', isShuffle: false, autoNext: true,
+    pt: 0, pd: 0, vol: 1, lastVol: 1,
+    ld: { vid: '', type: 'none', lines: [] }, cli: -1,
+    sleepSec: 0, sleepTimer: null, rate: 1.0,
+    failStreak: 0
+  };
+
+  var audioUrlCache = {};
+  try { audioUrlCache = JSON.parse(localStorage.getItem('malz_audio_cache') || '{}'); } catch (e) {}
+  var lyricsCache = {};
+  try { lyricsCache = JSON.parse(localStorage.getItem('malz_lyrics_cache') || '{}'); } catch (e) {}
+  try {
+    var v = parseFloat(localStorage.getItem('malz_vol'));
+    if (!isNaN(v) && v >= 0 && v <= 1) S.vol = v;
+    S.lastVol = S.vol > 0 ? S.vol : 1;
+    var r = parseFloat(localStorage.getItem('malz_rate'));
+    if (!isNaN(r) && r > 0) S.rate = r;
+  } catch (e) {}
+
+  function saveCaches() {
+    try {
+      var k = Object.keys(lyricsCache);
+      if (k.length > 60) {
+        var sorted = k.map(function (key) {
+          var e = lyricsCache[key];
+          return { k: key, t: (e && e.ts) || 0 };
+        }).sort(function (a, b) { return a.t - b.t; });
+        for (var i = 0; i < sorted.length - 60; i++) delete lyricsCache[sorted[i].k];
+      }
+      localStorage.setItem('malz_lyrics_cache', JSON.stringify(lyricsCache));
+
+      var k2 = Object.keys(audioUrlCache);
+      if (k2.length > 60) {
+        var sorted2 = k2.map(function (key) {
+          var e = audioUrlCache[key];
+          return { k: key, t: (e && e.ts) || 0 };
+        }).sort(function (a, b) { return a.t - b.t; });
+        for (var j = 0; j < sorted2.length - 60; j++) delete audioUrlCache[sorted2[j].k];
+      }
+      localStorage.setItem('malz_audio_cache', JSON.stringify(audioUrlCache));
+    } catch (e) {}
+  }
+
+  var AU = null;
+  var currentLoadToken = 0;
+
+  var Player = {
+    S: S, FI: FI, fm: fm, cn: cn, toHDCover: toHDCover,
+    _lyricsAbort: null,
+
+    init: function () {
+      AU = gid('audio');
+      if (!AU) {
+        AU = document.createElement('audio');
+        AU.id = 'audio';
+        AU.preload = 'auto';
+        document.body.appendChild(AU);
+      }
+      AU.volume = S.vol;
+      try { AU.playbackRate = S.rate; } catch (e) {}
+
+      AU.addEventListener('timeupdate', function () {
+        if (!AU.paused) {
+          S.pt = AU.currentTime || 0;
+          S.pd = AU.duration || 0;
+          Player.renderProgress();
+          Player.updateLyricsHighlight(S.pt);
+        }
+      });
+      AU.addEventListener('play', function () { S.ip = true; S.il = false; Player.updateUI(); Player.mediaState('playing'); });
+      AU.addEventListener('pause', function () { if (!AU.ended) { S.ip = false; S.il = false; Player.updateUI(); Player.mediaState('paused'); } });
+      AU.addEventListener('waiting', function () { S.il = true; Player.updateUI(); });
+      AU.addEventListener('playing', function () { S.il = false; Player.updateUI(); });
+      AU.addEventListener('loadedmetadata', function () { S.pd = AU.duration || 0; Player.renderProgress(); });
+      AU.addEventListener('ended', function () {
+        if (S.rm === 'one') { AU.currentTime = 0; AU.play().catch(function () {}); }
+        else if (S.autoNext) Player.next();
+        else { S.ip = false; Player.updateUI(); }
+      });
+      AU.addEventListener('error', function () {
+        if (!AU.src) return;
+        var vid = S.ct ? (S.ct.videoId || S.ct.id) : null;
+        if (vid && audioUrlCache[vid]) { delete audioUrlCache[vid]; saveCaches(); }
+        if (S.il) { S.il = false; S.ip = false; Player.updateUI(); }
+        var src = AU.currentSrc || AU.src || '';
+        if (vid && src.indexOf('/music/audio') !== -1 && AU.error && AU.error.code !== 1) {
+          var n = (AU._retry || 0);
+          if (n < 2) {
+            AU._retry = n + 1;
+            var retryCt = S.ct;
+            var retryTok = currentLoadToken;
+            setTimeout(function () {
+              if (S.ct !== retryCt) return;
+              if (retryTok !== currentLoadToken) return;
+              Player.playUrl('/music/audio?id=' + encodeURIComponent(vid) + '&r=' + Date.now(), retryCt, retryTok);
+            }, 400 * (n + 1));
+          }
+        }
+      });
+      AU.addEventListener('playing', function () {
+        AU._retry = 0;
+        Player._prefetchNext();
+      });
+      AU.addEventListener('volumechange', function () { Player.updateVolumeUI(); });
+
+      if ('mediaSession' in navigator) {
+        try {
+          navigator.mediaSession.setActionHandler('play', function () { Player.toggle(); });
+          navigator.mediaSession.setActionHandler('pause', function () { Player.toggle(); });
+          navigator.mediaSession.setActionHandler('previoustrack', function () { Player.prev(true); });
+          navigator.mediaSession.setActionHandler('nexttrack', function () { Player.next(); });
+          navigator.mediaSession.setActionHandler('seekto', function (d) {
+            if (AU.duration && isFinite(d.seekTime)) {
+              var t = Math.max(0, Math.min(AU.duration, d.seekTime));
+              AU.currentTime = t; S.pt = t; Player.renderProgress();
+            }
+          });
+        } catch (e) {}
+      }
+
+      document.addEventListener('click', Player._delegatedClick, true);
+    },
+
+    _delegatedClick: function (e) {
+      var target = e.target;
+      if (!target || !target.closest) return;
+
+      var playBtn = target.closest('#mini-play-btn, #fp-play-btn, #pPlayBtn');
+      if (playBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        Player.toggle();
+        return;
+      }
+
+      var prevBtn = target.closest('#mini-prev-btn, #fp-prev-btn');
+      if (prevBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        Player.prev();
+        return;
+      }
+
+      var nextBtn = target.closest('#mini-next-btn, #fp-next-btn');
+      if (nextBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        Player.next();
+        return;
+      }
+
+      var volBtn = target.closest('#mini-vol-btn');
+      if (volBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        Player.toggleMute();
+        return;
+      }
+    },
+
+    mediaState: function (state) {
+      if (!('mediaSession' in navigator)) return;
+      try { navigator.mediaSession.playbackState = state; } catch (e) {}
+    },
+
+    _stopAudio: function () {
+      if (!AU) return;
+      try { AU.pause(); } catch (e) {}
+      AU.removeAttribute('src');
+      try { AU.load(); } catch (e) {}
+      S.pt = 0;
+      S.pd = 0;
+      S.ip = false;
+      S.il = false;
+    },
+
+    load: function (track) {
+      if (!track) return;
+      currentLoadToken++;
+      var myToken = currentLoadToken;
+
+      var oldVid = S.ct ? (S.ct.videoId || S.ct.id) : null;
+      var newVid = track.videoId || track.id;
+
+      if (oldVid !== newVid) {
+        this._stopAudio();
+      }
+
+      S.ct = track;
+      S.pt = 0; S.pd = 0; S.il = true; S.ip = false;
+
+      this.updateUI();
+      this.updateMedia(track);
+      this.renderProgress();
+
+      if (window.MP) {
+        if (MP.update) MP.update(track);
+        if (MP.show) MP.show();
+      }
+
+      var fpEl = gid('full-player');
+      if (fpEl && window.FullPlayer && FullPlayer.isOpen() && FullPlayer.refresh) {
+        FullPlayer.refresh(track);
+      }
+
+      var vid = newVid;
+      if (!vid) { S.il = false; this.updateUI(); return; }
+
+      if (window.Queue && Queue.get) {
+        var qUrl = Queue.get(vid);
+        if (qUrl) { this.playUrl(qUrl, track, myToken); return; }
+      } else {
+        var cached = audioUrlCache[vid];
+        if (cached && cached.url && cached.exp && cached.exp > Date.now()) {
+          this.playUrl(cached.url, track, myToken);
+          return;
+        }
+        if (cached && (!cached.exp || cached.exp <= Date.now())) {
+          delete audioUrlCache[vid];
+          saveCaches();
+        }
+      }
+
+      var self = this;
+      var ytUrl = track.ytUrl || ('https://youtube.com/watch?v=' + vid);
+
+      if (window.Queue && Queue.fetchAudio) {
+        Queue.fetchAudio(vid, ytUrl)
+          .then(function (url) {
+            if (myToken !== currentLoadToken) return;
+            if (S.ct !== track) return;
+            if (!url) { self.handleFail(track); return; }
+            self.playUrl(url, track, myToken);
+          })
+          .catch(function () {
+            if (myToken !== currentLoadToken) return;
+            if (S.ct !== track) return;
+            self.handleFail(track);
+          });
+        return;
+      }
+
+      var localUrl = window.MALZ_CONFIG.base + '/audio?id=' + encodeURIComponent(vid);
+      self.playUrl(localUrl, track, myToken);
+    },
+
+    handleFail: function (track) {
+      if (S.ct !== track) return;
+      this._stopAudio();
+      this.updateUI();
+      this.renderProgress();
+
+      var vid = track.videoId || track.id;
+      if (vid) {
+        if (window.Queue && Queue.invalidate) Queue.invalidate(vid);
+        if (audioUrlCache[vid]) { delete audioUrlCache[vid]; saveCaches(); }
+      }
+
+      S.failStreak++;
+
+      if (App && App.toast) App.toast('Gagal memuat audio, cuba lagu lain');
+
+      if (S.failStreak >= 5) {
+        S.failStreak = 0;
+        S.autoNext = false;
+        if (App && App.toast) App.toast('Auto-play dimatikan. Cuba manual.');
+        return;
+      }
+
+      if (S.autoNext && S.pl.length > 1 && this._fromAuto) {
+        this._fromAuto = false;
+        var self = this;
+        setTimeout(function () { self.next(); }, 800);
+      }
+    },
+
+    _prefetchNext: function () {
+      if (!S.pl || S.pl.length < 2) return;
+      var ni = S.isShuffle ? Math.floor(Math.random() * S.pl.length) : (S.pi + 1) % S.pl.length;
+      var nt = S.pl[ni];
+      if (!nt) return;
+      var nvid = nt.videoId || nt.id;
+      if (!nvid) return;
+      if (this._pfVid === nvid) return;
+      this._pfVid = nvid;
+      try {
+        fetch('/music/audio?id=' + encodeURIComponent(nvid), { headers: { Range: 'bytes=0-1' } })
+          .then(function (r) { try { r.body && r.body.cancel && r.body.cancel(); } catch (e) {} })
+          .catch(function () {});
+      } catch (e) {}
+    },
+
+    playUrl: function (url, track, token) {
+      if (!AU) return;
+      if (token !== undefined && token !== currentLoadToken) return;
+      if (S.ct !== track) return;
+      if (!url) { this.handleFail(track); return; }
+
+      try { AU.pause(); } catch (e) {}
+      AU.removeAttribute('src');
+      try { AU.load(); } catch (e) {}
+
+      AU.src = url;
+      try { AU.playbackRate = S.rate; } catch (e) {}
+      AU.load();
+
+      var current = track;
+      var myToken = token;
+      var p = AU.play();
+      if (p && p.then) {
+        p.then(function () {
+          if (myToken !== currentLoadToken) return;
+          if (S.ct !== current) return;
+          S.il = false; S.ip = true; S.failStreak = 0;
+          Player.updateUI();
+        }).catch(function () {
+          if (myToken !== currentLoadToken) return;
+          if (S.ct !== current) return;
+          S.il = false; S.ip = false;
+          Player.updateUI();
+          Player.handleFail(current);
+        });
+      } else {
+        S.il = false;
+        S.failStreak = 0;
+        Player.updateUI();
+      }
+    },
+
+    playIndex: function (list, i, source) {
+      if (!list || !list[i]) return;
+      S.pl = list;
+      S.pi = i;
+      var track = list[i];
+      var vid = track.videoId || track.id;
+      var curVid = S.ct ? (S.ct.videoId || S.ct.id) : null;
+
+      if (curVid && curVid === vid && AU && AU.src) {
+        this.toggle();
+        return;
+      }
+
+      S.ld = { vid: vid, type: 'none', lines: [] };
+      S.cli = -1;
+      if (this.renderLyrics) this.renderLyrics();
+
+      this.load(track);
+      this.loadLyrics(vid, track);
+    },
+
+    next: function () {
+      if (!S.pl.length) return;
+      if (S.pl.length === 1) {
+        if (AU) { AU.currentTime = 0; AU.play().catch(function () {}); }
+        return;
+      }
+      var ni;
+      if (S.isShuffle) {
+        var tries = 0;
+        do { ni = Math.floor(Math.random() * S.pl.length); tries++; }
+        while (ni === S.pi && tries < 10);
+      } else {
+        ni = S.pi + 1;
+        if (ni >= S.pl.length) ni = 0;
+      }
+      Player._fromAuto = true;
+      this.playIndex(S.pl, ni, 'player');
+    },
+
+    prev: function (forceRestart) {
+      if (!S.pl.length) return;
+      if (!forceRestart && S.pt > 3 && AU) { AU.currentTime = 0; return; }
+      if (S.pl.length === 1) { if (AU) AU.currentTime = 0; return; }
+      var pi = S.pi - 1;
+      if (pi < 0) pi = S.pl.length - 1;
+      this.playIndex(S.pl, pi, 'player');
+    },
+
+    toggle: function () {
+      if (!S.ct) return;
+
+      if (!AU) AU = gid('audio');
+      if (!AU) return;
+
+      if (!AU.src) {
+        this.load(S.ct);
+        return;
+      }
+
+      if (AU.paused) {
+        S.il = true;
+        this.updateUI();
+        AU.play().then(function () {
+          S.il = false; S.ip = true;
+          Player.updateUI();
+        }).catch(function () {
+          S.il = false; S.ip = false;
+          Player.updateUI();
+        });
+      } else {
+        try { AU.pause(); } catch (e) {}
+        S.ip = false;
+        S.il = false;
+        this.updateUI();
+      }
+    },
+
+    seek: function (v) {
+      if (AU.duration) { AU.currentTime = (parseFloat(v) / 100) * AU.duration; }
+    },
+
+    setVolume: function (v) {
+      var vol = Math.max(0, Math.min(1, parseFloat(v) / 100));
+      if (vol > 0) S.lastVol = vol;
+      S.vol = vol;
+      if (AU) AU.volume = vol;
+      try { localStorage.setItem('malz_vol', String(vol)); } catch (e) {}
+      this.updateVolumeUI();
+    },
+
+    toggleMute: function () {
+      var cur = AU ? AU.volume : S.vol;
+      if (cur > 0) { S.lastVol = cur; this.setVolume(0); }
+      else { this.setVolume((S.lastVol || 1) * 100); }
+    },
+
+    setRate: function (r) {
+      S.rate = parseFloat(r) || 1.0;
+      if (AU) { try { AU.playbackRate = S.rate; } catch (e) {} }
+      try { localStorage.setItem('malz_rate', String(S.rate)); } catch (e) {}
+    },
+
+    toggleRepeat: function () {
+      S.rm = S.rm === 'off' ? 'all' : (S.rm === 'all' ? 'one' : 'off');
+      this.updateRepeatUI();
+      this.pushState();
+      if (App && App.toast) App.toast(S.rm === 'off' ? 'Ulang ditutup' : (S.rm === 'one' ? 'Ulang 1 lagu' : 'Ulang semua'));
+    },
+
+    toggleShuffle: function () {
+      S.isShuffle = !S.isShuffle;
+      this.updateShuffleUI();
+      if (App && App.toast) App.toast(S.isShuffle ? 'Shuffle aktif' : 'Shuffle mati');
+    },
+
+    renderProgress: function () {
+      var p = S.pd > 0 ? (S.pt / S.pd) * 100 : 0;
+      var ids = ['mini-progress', 'mini-progress-fill', 'fp-progress-fill', 'full-progress'];
+      ids.forEach(function (id) { var e = gid(id); if (e) e.style.width = p + '%'; });
+      var sbs = ['seek-bar', 'fp-seek'];
+      sbs.forEach(function (id) { var e = gid(id); if (e) e.value = p; });
+      var tcs = ['time-curr', 'fp-time-curr'];
+      tcs.forEach(function (id) { var e = gid(id); if (e) e.textContent = fm(S.pt); });
+      var tds = ['time-dur', 'fp-time-dur'];
+      tds.forEach(function (id) { var e = gid(id); if (e) e.textContent = fm(S.pd); });
+      var mcp = gid('mini-circle-progress');
+      if (mcp) { var tot = 131.95; mcp.style.strokeDashoffset = Math.max(0, tot * (1 - p / 100)); }
+    },
+
+    updateVolumeUI: function () {
+      var vol = AU ? AU.volume : S.vol;
+      var pct = Math.round(vol * 100);
+      var vols = ['vol-bar', 'fp-vol'];
+      vols.forEach(function (id) { var e = gid(id); if (e) e.value = pct; });
+      var fills = ['fp-vol-fill', 'full-vol-progress'];
+      fills.forEach(function (id) { var e = gid(id); if (e) e.style.width = pct + '%'; });
+      var texts = ['fp-vol-text', 'full-vol-text'];
+      texts.forEach(function (id) { var e = gid(id); if (e) e.textContent = pct + '%'; });
+      var icons = ['mini-vol-icon', 'fp-vol-icon', 'full-vol-icon'];
+      icons.forEach(function (id) {
+        var el = gid(id);
+        if (!el) return;
+        var html;
+        if (pct === 0) html = '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>';
+        else if (pct < 35) html = '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>';
+        else html = '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>';
+        el.innerHTML = html;
+      });
+    },
+
+    updateUI: function () {
+      var icon;
+      if (S.il) {
+        icon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="pointer-events:none"><circle cx="12" cy="12" r="9" stroke-dasharray="6 4"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.8s" repeatCount="indefinite"/></circle></svg>';
+      } else if (S.ip) {
+        icon = '<svg viewBox="0 0 24 24" fill="currentColor" style="pointer-events:none"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>';
+      } else {
+        icon = '<svg viewBox="0 0 24 24" fill="currentColor" style="pointer-events:none"><polygon points="6 3 20 12 6 21 6 3"/></svg>';
+      }
+
+      ['mini-play-btn', 'pPlayBtn', 'fp-play-btn'].forEach(function (id) {
+        var e = gid(id);
+        if (!e) return;
+        e.innerHTML = icon;
+      });
+    },
+
+    updateMedia: function (track) {
+      if (!('mediaSession' in navigator)) return;
+      try {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: track.title || 'Malz-Musify',
+          artist: track.artist || '',
+          album: 'Malz-Musify',
+          artwork: [{ src: track.cover || FI, sizes: '512x512', type: 'image/webp' }]
+        });
+      } catch (e) {}
+    },
+
+    updateRepeatUI: function () {
+      var btn = gid('fp-repeat'); if (!btn) return;
+      btn.style.color = S.rm === 'one' ? '#ffffff' : 'rgba(255,255,255,0.5)';
+    },
+
+    updateShuffleUI: function () {
+      var btn = gid('fp-shuffle'); if (!btn) return;
+      btn.style.color = S.isShuffle ? '#ffffff' : 'rgba(255,255,255,0.5)';
+    },
+
+    loadLyrics: function (vid, track) {
+      if (!vid) return;
+
+      if (Player._lyricsAbort) {
+        try { Player._lyricsAbort.abort(); } catch (e) {}
+        Player._lyricsAbort = null;
+      }
+
+      if (lyricsCache[vid]) {
+        var cached = lyricsCache[vid];
+        if (S.ct && (S.ct.videoId || S.ct.id) === vid) {
+          S.ld = cached;
+          S.cli = -1;
+          this.renderLyrics();
+          if (S.pt > 0) {
+            try { this.updateLyricsHighlight(S.pt); } catch (e) {}
+          }
+        }
+        return;
+      }
+
+      var myVid = vid;
+      var tP = track && track.title ? '&title=' + encodeURIComponent(track.title) : '';
+      var aP = track && track.artist ? '&artist=' + encodeURIComponent(track.artist) : '';
+
+      try {
+        Player._lyricsAbort = new AbortController();
+      } catch (e) {
+        Player._lyricsAbort = null;
+      }
+
+      var fetchOpts = { cache: 'no-store' };
+      if (Player._lyricsAbort) fetchOpts.signal = Player._lyricsAbort.signal;
+      var lyricsUrl = window.MALZ_CONFIG.api + 'lyrics&id=' + encodeURIComponent(myVid) + tP + aP;
+      var lyricsTimeout = null;
+      if (typeof AbortController !== 'undefined') {
+        lyricsTimeout = setTimeout(function () {
+          try { if (Player._lyricsAbort) Player._lyricsAbort.abort(); } catch (e) {}
+        }, 15000);
+      }
+
+      fetch(lyricsUrl, fetchOpts)
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (lyricsTimeout) clearTimeout(lyricsTimeout);
+          var curVid = S.ct ? (S.ct.videoId || S.ct.id) : null;
+          if (curVid !== myVid) return;
+          var l = d && d.result && d.result.lyrics;
+          if (l && l.lines && l.lines.length) {
+            var payload = { vid: myVid, type: l.type || 'none', lines: l.lines, ts: Date.now() };
+            lyricsCache[myVid] = payload;
+            saveCaches();
+            if (S.ct && (S.ct.videoId || S.ct.id) === myVid) {
+              S.ld = payload;
+              S.cli = -1;
+              Player.renderLyrics();
+              if (S.pt > 0) {
+                try { Player.updateLyricsHighlight(S.pt); } catch (e) {}
+              }
+            }
+          } else {
+            if (S.ct && (S.ct.videoId || S.ct.id) === myVid) {
+              S.ld = { vid: myVid, type: 'none', lines: [] };
+              S.cli = -1;
+              Player.renderLyrics();
+            }
+          }
+        })
+        .catch(function (e) {
+          if (lyricsTimeout) clearTimeout(lyricsTimeout);
+          if (e && e.name === 'AbortError') {
+            var abortVid = S.ct ? (S.ct.videoId || S.ct.id) : null;
+            if (abortVid === myVid) {
+              S.ld = { vid: myVid, type: 'none', lines: [], error: 'timeout' };
+              S.cli = -1;
+              Player.renderLyrics();
+            }
+            return;
+          }
+          var curVid = S.ct ? (S.ct.videoId || S.ct.id) : null;
+          if (curVid !== myVid) return;
+          if (S.ct && (S.ct.videoId || S.ct.id) === myVid) {
+            S.ld = { vid: myVid, type: 'none', lines: [] };
+            S.cli = -1;
+            Player.renderLyrics();
+          }
+        });
+    },
+
+    renderLyrics: function () {
+      var content = gid('lyrics-content');
+      var inline = gid('full-inline-lyrics-content');
+      var empty = gid('lyrics-empty');
+      var lines = (S.ld && S.ld.lines) ? S.ld.lines : [];
+      var curVid = S.ct ? (S.ct.videoId || S.ct.id) : null;
+
+      if (!curVid || !S.ld || S.ld.vid !== curVid) {
+        if (content) content.innerHTML = '';
+        if (inline) inline.innerHTML = '';
+        if (empty) empty.style.display = 'block';
+        return;
+      }
+
+      if (!lines.length) {
+        if (content) content.innerHTML = '';
+        if (inline) inline.innerHTML = '';
+        if (empty) empty.style.display = 'block';
+        return;
+      }
+      if (empty) empty.style.display = 'none';
+      var html = lines.map(function (line, i) {
+        var trans = line.translation ? '<span class="lyric-translation">(' + esc(line.translation) + ')</span>' : '';
+        return '<p class="lyric-line" data-time="' + (line.time || 0) + '" data-index="' + i + '" onclick="Player.seekToLine(' + (line.time || 0) + ')">' + esc(line.text) + trans + '</p>';
+      }).join('');
+      if (content) content.innerHTML = html;
+      if (inline) {
+        var inlineHtml = lines.map(function (line, i) {
+          var trans = line.translation ? '<span class="lyric-translation">' + esc(line.translation) + '</span>' : '';
+          return '<p class="inline-lyric-line" data-index="' + i + '" onclick="Player.seekToLine(' + (line.time || 0) + ')">' + esc(line.text) + trans + '</p>';
+        }).join('');
+        inline.innerHTML = inlineHtml;
+      }
+    },
+
+    seekToLine: function (t) { if (AU && isFinite(t)) { AU.currentTime = t; S.pt = t; } },
+
+    updateLyricsHighlight: function (t) {
+      if (!S.ld || !S.ld.lines || !S.ld.lines.length) return;
+      var curVid = S.ct ? (S.ct.videoId || S.ct.id) : null;
+      if (!curVid || S.ld.vid !== curVid) return;
+      var idx = -1;
+      for (var i = 0; i < S.ld.lines.length; i++) {
+        if ((S.ld.lines[i].time || 0) <= t + 0.15) idx = i;
+      }
+      if (idx === S.cli) return;
+      S.cli = idx;
+      var all = document.querySelectorAll('.lyric-line, .inline-lyric-line');
+      for (var j = 0; j < all.length; j++) {
+        var i2 = parseInt(all[j].getAttribute('data-index'), 10);
+        all[j].classList.remove('active-lyric', 'past-lyric');
+        if (i2 === idx) {
+          all[j].classList.add('active-lyric');
+          var scroller = all[j].closest('#lyrics-scroll-container, #full-inline-lyrics-scroll');
+          if (scroller) {
+            var o = all[j].offsetTop - scroller.clientHeight / 2 + all[j].offsetHeight / 2;
+            scroller.scrollTo({ top: o, behavior: 'smooth' });
+          }
+        } else if (i2 < idx) {
+          all[j].classList.add('past-lyric');
+        }
+      }
+    },
+
+    sleepMinutes: function (m) {
+      this.clearSleep();
+      S.sleepSec = m * 60;
+      S.sleepTimer = setInterval(function () {
+        S.sleepSec--;
+        if (S.sleepSec <= 0) {
+          Player.clearSleep();
+          if (AU) AU.pause();
+          S.ip = false; Player.updateUI();
+          if (App && App.toast) App.toast('Timer selesai');
+        }
+      }, 1000);
+      if (App && App.toast) App.toast('Timer ' + m + ' menit');
+    },
+
+    clearSleep: function () {
+      if (S.sleepTimer) clearInterval(S.sleepTimer);
+      S.sleepTimer = null;
+      S.sleepSec = 0;
+    },
+
+    _extract: extractAudioUrl,
+    _whitelist: AUDIO_HOST_WHITELIST
+  };
+
+  window.Player = Player;
+  window.S = S;
+  window.extractAudioUrl = extractAudioUrl;
+
+})();

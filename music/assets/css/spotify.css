@@ -1,0 +1,107 @@
+:root {
+  --green: #1ed760;
+  --green-soft: rgba(30, 215, 96, 0.14);
+  --rail: 232px;
+}
+
+.spotify-card-play { background: var(--green); color: #000; box-shadow: 0 8px 22px rgba(30, 215, 96, 0.35); }
+.nav-rail-head {
+  display: none;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px 14px;
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: -0.3px;
+  color: #fff;
+}
+.nav-rail-head i {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 12px rgba(30, 215, 96, 0.8);
+  flex-shrink: 0;
+}
+.spotify-card-play:hover { background: #23f06a; transform: scale(1.06); }
+.spotify-card.is-playing .spotify-card-title { color: var(--green); }
+.spotify-chip:hover { background: var(--green-soft); border-color: rgba(30, 215, 96, 0.45); color: var(--green); }
+
+#mini-progress { background: var(--green) !important; box-shadow: 0 0 10px rgba(30, 215, 96, 0.45); }
+#mini-play-btn { background: var(--green) !important; color: #000 !important; }
+#mini-player { border-top-color: rgba(30, 215, 96, 0.22) !important; background: #000 !important; }
+#mini-player input[type="range"], #full-player input[type="range"] { accent-color: var(--green); }
+
+.logo span b { color: var(--green); }
+.nav-menu a:hover, .nav-menu a.active { color: var(--green); }
+.nav-menu a.active::after { background: var(--green); box-shadow: 0 0 8px rgba(30, 215, 96, 0.7); }
+
+@media (min-width: 1000px) {
+  body { padding-top: 0; padding-left: var(--rail); }
+
+  .nav {
+    top: 0; left: 0; right: auto; bottom: 0;
+    width: var(--rail);
+    height: auto;
+    border-bottom: none;
+    border-right: 1px solid var(--border);
+    background: rgba(0, 0, 0, 0.94);
+  }
+  .nav-in {
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    gap: 18px;
+    padding: 20px 14px 16px;
+    height: 100%;
+  }
+  .logo { padding: 0 6px; }
+  .nav-rail-head { display: flex; }
+
+  .nav-menu {
+    flex-direction: column;
+    gap: 4px;
+    width: 100%;
+    font-size: 14px;
+    letter-spacing: 0;
+  }
+  .nav-menu li { width: 100%; }
+  .nav-menu a {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 8px;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+  .nav-menu a:hover, .nav-menu a.active { background: rgba(255, 255, 255, 0.07); }
+  .nav-menu a.active::after { display: none; }
+  .nav-menu a::before {
+    content: "";
+    width: 20px; height: 20px;
+    flex-shrink: 0;
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 20px 20px;
+    opacity: 0.85;
+  }
+  .nav-menu a[data-nav="home"]::before {
+    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 10.5 12 3l9 7.5'/%3E%3Cpath d='M5 9.5V21h14V9.5'/%3E%3C/svg%3E");
+  }
+  .nav-menu a[data-nav="search"]::before {
+    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
+  }
+  .nav-menu a[data-nav="library"]::before {
+    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M4 4v16M9 4v16'/%3E%3Cpath d='m14 5 4 15'/%3E%3C/svg%3E");
+  }
+  .nav-menu a[data-nav="liked"]::before {
+    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20.8 5.6a5 5 0 0 0-7.1 0L12 7.3l-1.7-1.7a5 5 0 1 0-7.1 7.1l8.8 8.8 8.8-8.8a5 5 0 0 0 0-7.1z'/%3E%3C/svg%3E");
+  }
+  .nav-menu a.active::before { opacity: 1; }
+
+  .nav-right { justify-content: space-between; }
+  .mobile-menu { display: none !important; }
+
+  .spotify-main, .spotify-hero-content { max-width: 1500px; }
+  #mini-player { left: var(--rail) !important; }
+  #full-player { left: var(--rail) !important; }
+}
